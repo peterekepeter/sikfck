@@ -1,13 +1,13 @@
 #include <vector>
 
 enum class InstructionType {
-	Nop = 0,
-	Add = 2,
-	PtrAdd = 4,
-	In = 8,
-	Out = 9,
-	Jz = 10,
-	Jnz = 11
+	Nop,
+	Add,
+	PtrAdd,
+	In,
+	Out,
+	Jz,
+	Jnz 
 };
 
 template <typename TRegister> class Instruction {
@@ -45,16 +45,94 @@ public:
 	}
 };
 
-class Memory {
-	
+template <typename TRegister, typename TPointer> class Memory {
+
+	TRegister raw[65536];
+public:
+	Memory() {
+		for (unsigned i=0; i<65536; i++) {
+			raw[i] = 0;
+		}
+	}
+
+	void Write(TPointer pointer, TRegister current_value) {
+		raw[pointer & 0xffff] = current_value;
+	}
+
+	TRegister Read(TPointer pointer) {
+		return raw[pointer & 0xffff];
+	}
 };
 
 template <typename TRegister, typename TProgramCounter, typename TPointer> class Cpu {
-	TProgramCounter programCoutner;
+	TProgramCounter programCounter;
 	TPointer pointer;
+	TRegister currentValue;
+	bool dirty;
+	bool zero;
 
-	void Run(const Program<TRegister, TProgramCounter>& program, Memory& memory) {
-		
+public:
+
+	Cpu() {
+		programCounter = 0;
+		pointer = 0;
+		currentValue = 0;
+		dirty = false;
+		zero = false;
+	}
+
+	void Run(const Program<TRegister, TProgramCounter>& program, Memory<TRegister, TPointer>& memory) {
+		while (programCounter < program.GetSize()) {
+			auto instruction = program.Read(programCounter);
+			switch (instruction.Type) {
+			case InstructionType::Nop:
+				++programCounter;
+				break;
+			case InstructionType::Add:
+				currentValue += instruction.Value;
+				zero = currentValue == 0;
+				dirty = true;
+				++programCounter;
+				break;
+			case InstructionType::PtrAdd:
+				if (dirty) {
+					memory.Write(pointer, currentValue);
+					dirty = false;
+				}
+				pointer += instruction.Value;
+				currentValue = memory.Read(pointer);
+				++programCounter;
+				break;
+			case InstructionType::In:
+				while(instruction.Value--) {
+					currentValue = std::getchar();
+				}
+				zero = currentValue == 0;
+				dirty = true;
+				++programCounter;
+				break;
+			case InstructionType::Out:
+				while(instruction.Value--) {
+					std::putchar(currentValue);
+				}
+				++programCounter;
+				break;
+			case InstructionType::Jz:
+				if (zero) {
+					programCounter += instruction.Value;
+				} else {
+					++programCounter;
+				}
+				break;
+			case InstructionType::Jnz:
+				if (!zero) {
+					programCounter += instruction.Value;
+				} else {
+					++programCounter;
+				}
+				break;
+			}
+		}
 	}
 };
 
@@ -118,6 +196,7 @@ public:
 				else {
 					++instruction.Value;
 				}
+				break;
 
 			case ',':
 				if (instruction.Type != InstructionType::In) {
@@ -177,5 +256,8 @@ public:
 
 int main() {
 	Compiler<int, int> compiler;
-	compiler.Compile("++++++++[>+<-]");
+	auto program = compiler.Compile("++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>.");
+	Cpu<int, int, int> core;
+	Memory<int, int> memory;
+	core.Run(program, memory);
 }
