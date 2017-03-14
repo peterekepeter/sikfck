@@ -1,4 +1,7 @@
 #include <vector>
+#include <fstream>
+#include <sstream>
+#include <iostream>
 
 enum class InstructionType {
 	Nop,
@@ -9,6 +12,20 @@ enum class InstructionType {
 	Jz,
 	Jnz 
 };
+
+std::ostream& operator<<(std::ostream& out, const InstructionType& i){
+	switch (i)
+	{
+	case InstructionType::Nop: out << "Nop"; break;
+	case InstructionType::Add: out << "Add"; break;
+	case InstructionType::PtrAdd: out << "Ptr"; break;
+	case InstructionType::In: out << "In "; break;
+	case InstructionType::Out: out << "Out"; break;
+	case InstructionType::Jz: out << "Jz "; break;
+	case InstructionType::Jnz: out << "Jnz"; break;
+	}
+	return out;
+}
 
 template <typename TRegister> class Instruction {
 public:
@@ -22,9 +39,9 @@ public:
 };
 
 template <typename TRegister, typename TProgramCounter> class Program {
+public:
 	std::vector<InstructionType> itype;
 	std::vector<TRegister> ivalue;
-public:
 
 	Instruction<TRegister> Read(TProgramCounter index) const {
 		return Instruction<TRegister>(itype[index], ivalue[index]);
@@ -101,6 +118,7 @@ public:
 				}
 				pointer += instruction.Value;
 				currentValue = memory.Read(pointer);
+				zero = currentValue == 0;
 				++programCounter;
 				break;
 			case InstructionType::In:
@@ -131,6 +149,8 @@ public:
 					++programCounter;
 				}
 				break;
+			default:
+				throw std::invalid_argument("Illegal instruction.");
 			}
 		}
 	}
@@ -254,10 +274,23 @@ public:
 
 };
 
-int main() {
+int main(int argc, char** argv) {
+	if (argc!=2)
+	{
+		printf("Usage: sikfck sourcefile.b\n");
+		return 1;
+	}
+	std::ifstream t(argv[1]);
+	std::stringstream buffer;
+	buffer << t.rdbuf();
 	Compiler<int, int> compiler;
-	auto program = compiler.Compile("++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>.");
+	auto program = compiler.Compile(buffer.str());
 	Cpu<int, int, int> core;
 	Memory<int, int> memory;
 	core.Run(program, memory);
+	/*for (int i=0; i<program.itype.size(); i++)
+	{
+		std::cout << program.itype[i] << " " << static_cast<int>(program.ivalue[i]) << "\n";
+	}*/
+	return 0;
 }
