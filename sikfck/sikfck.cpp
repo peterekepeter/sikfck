@@ -13,6 +13,9 @@ std::ostream& sikfck::operator<<(std::ostream& out, const InstructionType& i) {
 		case InstructionType::Jz: out << "JZ "; break;
 		case InstructionType::Jnz: out << "JNZ"; break;
 		case InstructionType::Set: out << "SET"; break;
+		case InstructionType::AddM: out << "ADDM"; break;
+		case InstructionType::SubM: out << "SUBM"; break;
+		case InstructionType::MulM: out << "MULM"; break;
 	}
 	return out;
 }

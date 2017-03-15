@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
 	Compiler<int, int> compiler;
 	compiler.verboseOptimisation = verboseOptimisation;
 	compiler.UseLoopOptimization<loopOpt::SetToZero<int, int>>();
+	compiler.UseLoopOptimization<loopOpt::LinearArithmetic<int, int>>();
 
 	auto program = compiler.Compile(buffer.str());
 	auto optimised = compiler.Optimize(program);

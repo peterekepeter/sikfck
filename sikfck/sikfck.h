@@ -9,6 +9,9 @@ namespace sikfck {
 		Add,
 		AddPi,
 		AddPd,
+		AddM, // add current value to memory cell
+		SubM, // subtract current value from memory cell
+		MulM, // multiply current value to memory cell
 		PtrAdd,
 		In,
 		Out,
@@ -214,6 +217,41 @@ namespace sikfck {
 				auto instruction = program.Read(programCounter);
 				switch (instruction.type) {
 				case InstructionType::Nop:
+					++programCounter;
+					break;
+				case InstructionType::AddM:
+					if (instruction.value == 0) {
+						currentValue <<= 1;
+						zero = currentValue == 0;
+						dirty = true;
+					} else {
+						auto location = pointer + instruction.value;
+						memory.Write(location, memory.Read(location) + currentValue);
+					}
+					++programCounter;
+					break;
+				case InstructionType::SubM:
+					if (instruction.value == 0) {
+						currentValue = 0;
+						zero = true;
+						dirty = true;
+					}
+					else {
+						auto location = pointer + instruction.value;
+						memory.Write(location, memory.Read(location) - currentValue);
+					}
+					++programCounter;
+					break;
+				case InstructionType::MulM:
+					if (instruction.value == 0) {
+						currentValue *= currentValue;
+						zero = true;
+						dirty = true;
+					}
+					else {
+						auto location = pointer + instruction.value;
+						memory.Write(location, memory.Read(location) * currentValue);
+					}
 					++programCounter;
 					break;
 				case InstructionType::Add:
