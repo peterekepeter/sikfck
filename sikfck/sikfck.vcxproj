@@ -147,6 +147,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="sikfck.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="sikfckLoopOptimizations.h" />
+    <ClInclude Include="sikfckCompiler.h" />
+    <ClInclude Include="sikfck.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -18,5 +18,19 @@
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="sikfck.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="sikfck.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sikfckLoopOptimizations.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sikfckCompiler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
