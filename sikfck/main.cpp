@@ -3,6 +3,7 @@
 #include <sstream>
 #include <iostream>
 #include <ostream>
+#include <memory>
 
 enum class InstructionType {
 	Nop,
@@ -13,7 +14,8 @@ enum class InstructionType {
 	In,
 	Out,
 	Jz,
-	Jnz 
+	Jnz,
+	Set
 };
 
 std::ostream& operator<<(std::ostream& out, const InstructionType& i){
@@ -28,6 +30,7 @@ std::ostream& operator<<(std::ostream& out, const InstructionType& i){
 	case InstructionType::Out: out << "OUT"; break;
 	case InstructionType::Jz: out << "JZ "; break;
 	case InstructionType::Jnz: out << "JNZ"; break;
+	case InstructionType::Set: out << "SET"; break;
 	}
 	return out;
 }
@@ -289,6 +292,12 @@ public:
 					++programCounter;
 				}
 				break;
+			case InstructionType::Set:
+				currentValue = instruction.value;
+				zero = currentValue == 0;
+				dirty = true;
+				++programCounter;
+				break;
 			default:
 				throw std::invalid_argument("Illegal instruction.");
 			}
@@ -296,9 +305,26 @@ public:
 	}
 };
 
+template <typename TRegister, typename TProgramCounter> class LoopOptimization
+{
+public:
+	bool verbose;
+
+	virtual bool TryPerform(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end)
+	{
+		return false;
+	}
+
+	virtual ~LoopOptimization()
+	{
+
+	}
+};
 
 template <typename TRegister, typename TProgramCounter> class Compiler {
 private:
+
+	std::vector<std::unique_ptr<LoopOptimization<typename TRegister, typename TProgramCounter>>> loopOptimizations;
 
 	class OptimisationInfo
 	{
@@ -306,6 +332,36 @@ private:
 		int instructionDelta = 0;
 		int pointerDelta = 0;
 	};
+
+	void PrintOptimizedSection(const Program<TRegister, TProgramCounter>& input, const Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end, TProgramCounter outBegin, TProgramCounter outEnd)
+	{
+		TProgramCounter i = begin, j = outBegin;
+		while (i<end || j<outEnd)
+		{
+			if (i < end) {
+				std::cerr << "\t" << input.itype[i] << "\t" << std::showpos << static_cast<int>(input.ivalue[i]) << "\t";
+			}
+			else {
+				std::cerr << "\t\t\t";
+			}
+
+			if (j < outEnd)
+			{
+				if (i < end)
+				{
+					std::cerr << "->";
+				}
+				std::cerr << "\t" << output.itype[j] << "\t" << std::showpos << static_cast<int>(output.ivalue[j]) << "\t";
+			}
+			else
+			{
+				std::cerr << "\t\t\t";
+			}
+			std::cerr << "\n";
+			++i;
+			++j;
+		}
+	}
 
 	OptimisationInfo OptimizeFlat(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end)
 	{
@@ -325,6 +381,14 @@ private:
 			case InstructionType::Nop:
 				// strip nop
 				continue;
+			case InstructionType::AddPi:
+				info.pointerDelta += 1;
+				output.Append(instruction);
+				break;
+			case InstructionType::AddPd:
+				info.pointerDelta -= 1;
+				output.Append(instruction);
+				break;
 			case InstructionType::PtrAdd:
 				if (instruction.value == 0)
 				{
@@ -366,32 +430,7 @@ private:
 		// print optimised section
 		if (verboseOptimisation)
 		{
-			TProgramCounter i = begin, j = outBegin;
-			while (i<end || j<outEnd)
-			{
-				if (i < end) {
-					std::cerr << "\t" << input.itype[i] << "\t" << std::showpos << static_cast<int>(input.ivalue[i]) << "\t";
-				}
-				else {
-					std::cerr << "\t\t\t";
-				}
-
-				if (j < outEnd)
-				{
-					if (i < end)
-					{
-						std::cerr << "->";
-					}
-					std::cerr << "\t" << output.itype[j] << "\t" << std::showpos << static_cast<int>(output.ivalue[j]) << "\t";
-				}
-				else
-				{
-					std::cerr << "\t\t\t";
-				}
-				std::cerr << "\n";
-				++i;
-				++j;
-			}
+			PrintOptimizedSection(input, output, begin, end, outBegin, outEnd);
 			std::cerr << std::noshowpos << "Opt Flat End (" << begin << ", " << (end - 1) << ")\n";
 			std::cerr << "i-delta: " << info.instructionDelta << " p-delta: " << info.pointerDelta << "\n";
 		}
@@ -407,6 +446,51 @@ private:
 		TProgramCounter innerBegin = begin + 1;
 		TProgramCounter innerEnd = end - 1;
 
+		auto startingOutputSize = output.GetSize();
+		auto patternMatched = false;
+
+		for (auto& optimizer : loopOptimizations)
+		{
+			bool success = optimizer->TryPerform(input, output, begin, end);
+			if (success)
+			{
+				patternMatched = true;
+				break;
+			}
+		}
+
+		if (patternMatched)
+		{
+			//no need to continue
+			OptimisationInfo info;
+			info.instructionDelta = (output.GetSize() - startingOutputSize) - (end - begin);
+			TProgramCounter outBegin = startingOutputSize;
+			TProgramCounter outEnd = output.GetSize();
+			for (TProgramCounter i = outBegin; i<outEnd; ++i)
+			{
+				Instruction<TRegister> instruction = output.Read(i);
+				switch (instruction.type)
+				{
+				case InstructionType::PtrAdd:
+					info.pointerDelta += instruction.value;
+					break;
+				case InstructionType::AddPi:
+					info.pointerDelta += 1;
+					break;
+				case InstructionType::AddPd:
+					info.pointerDelta -= 1;
+					break;
+				default:
+					// no need to do anything
+					break;
+				}
+			}
+			if (verboseOptimisation)
+			{
+				PrintOptimizedSection(input, output, begin, end, outBegin, outEnd);
+			}
+			return info;
+		}
 		InstructionDebug<TRegister> loopBegin = input.ReadDebug(begin);
 		InstructionDebug<TRegister> loopEnd = input.ReadDebug(end - 1);
 
@@ -689,20 +773,65 @@ public:
 		return program;
 	}
 
-	
+	template<typename TOpt> void UseLoopOptimization()
+	{
+		auto ptr = std::make_unique<TOpt>();
+		ptr->verbose = this->verboseOptimisation;
+		loopOptimizations.push_back(std::move(ptr));
+	}
 
-	Program<TRegister, TProgramCounter> Optimize(const Program<TRegister, TProgramCounter>& input)
+	Program<TRegister, TProgramCounter> Optimize(const Program<TRegister, TProgramCounter>& input, size_t pass = 0)
 	{
 		Program<TRegister, TProgramCounter> output;
 		output.debug = input.debug;
 		output.source = input.source;
-		OptimizeProgram(input, output, 0, input.GetSize());
-		return output;
+		OptimisationInfo info;
+		if (verboseOptimisation)
+		{
+			std::cerr << "\n\n======= Optimization pass " << std::noshowpos << pass << " =======\n\n";
+		}
+		info = OptimizeProgram(input, output, 0, input.GetSize());
+		if (info.instructionDelta == 0)
+		{
+			return output;
+		}
+		else
+		{
+			return Optimize(output, pass+1);
+		}
+		
 	}
 
 	bool verboseOptimisation = false;
 };
 
+
+template <typename TRegister, typename TProgramCounter> class SetToZeroLoopOptimization : public LoopOptimization<TRegister, TProgramCounter>
+{
+public:
+	bool TryPerform(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end) override
+	{
+		TProgramCounter outerInstructionCount = end - begin;
+		
+		if (outerInstructionCount == 3)
+		{
+			InstructionDebug<TRegister> a = input.ReadDebug(begin);
+			InstructionDebug<TRegister> b = input.ReadDebug(begin + 1);
+			InstructionDebug<TRegister> c = input.ReadDebug(begin + 2);
+			if (a.type == InstructionType::Jz && c.type == InstructionType::Jnz)
+			{
+				if (b.type == InstructionType::Add && (b.value == +1 || b.value == -1))
+				{
+					InstructionDebug<TRegister> replacement(InstructionType::Set, 0, a.sourceBegin, c.sourceEnd, a.sourceLine, a.sourceColumn);
+					output.Append(replacement);
+					return true;
+				}
+				return false; 
+			}
+		}
+		return false;
+	}
+};
 
 
 int main(int argc, char** argv) {
@@ -718,14 +847,16 @@ int main(int argc, char** argv) {
 	std::ifstream t(argv[1]);
 	std::stringstream buffer;
 	buffer << t.rdbuf();
+
 	Compiler<int, int> compiler;
 	compiler.verboseOptimisation = verboseOptimisation;
+	compiler.UseLoopOptimization<SetToZeroLoopOptimization<int, int>>();
+
 	auto program = compiler.Compile(buffer.str());
 	auto optimised = compiler.Optimize(program);
 	Cpu<int, int, int> core;
 	Memory<int, int> memory;
 	core.Run(optimised, memory);
-
 
 	if (finalListing)
 	{
