@@ -2,6 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <ostream>
 
 enum class InstructionType {
 	Nop,
@@ -16,49 +17,168 @@ enum class InstructionType {
 std::ostream& operator<<(std::ostream& out, const InstructionType& i){
 	switch (i)
 	{
-	case InstructionType::Nop: out << "Nop"; break;
-	case InstructionType::Add: out << "Add"; break;
-	case InstructionType::PtrAdd: out << "Ptr"; break;
-	case InstructionType::In: out << "In "; break;
-	case InstructionType::Out: out << "Out"; break;
-	case InstructionType::Jz: out << "Jz "; break;
-	case InstructionType::Jnz: out << "Jnz"; break;
+	case InstructionType::Nop: out << "NOP"; break;
+	case InstructionType::Add: out << "ADD"; break;
+	case InstructionType::PtrAdd: out << "PTR"; break;
+	case InstructionType::In: out << "IN "; break;
+	case InstructionType::Out: out << "OUT"; break;
+	case InstructionType::Jz: out << "JZ "; break;
+	case InstructionType::Jnz: out << "JNZ"; break;
 	}
 	return out;
 }
 
 template <typename TRegister> class Instruction {
 public:
-	InstructionType Type;
+	InstructionType type;
 
 	Instruction(InstructionType type, const TRegister& value)
-		: Type(type),
-		  Value(value) {}
+		: type(type),
+		  value(value) {}
 
-	TRegister Value;
+	TRegister value;
+};
+
+template <typename TRegister> class InstructionDebug : public Instruction<TRegister>
+{
+public:
+	size_t sourceBegin, sourceEnd, sourceLine, sourceColumn;
+
+	InstructionDebug(InstructionType type, const TRegister& value, size_t source_begin, size_t source_end, size_t source_line, size_t source_column)
+		: Instruction(type, value),
+		  sourceBegin(source_begin),
+		  sourceEnd(source_end),
+		  sourceLine(source_line),
+		  sourceColumn(source_column)
+	{
+	}
 };
 
 template <typename TRegister, typename TProgramCounter> class Program {
 public:
+
 	std::vector<InstructionType> itype;
 	std::vector<TRegister> ivalue;
+
+	//for debug
+	std::vector<size_t> sourceBegin;
+	std::vector<size_t> sourceEnd;
+	std::vector<size_t> sourceLine;
+	std::vector<size_t> sourceColumn;
+	std::string source;
+	bool debug;
 
 	Instruction<TRegister> Read(TProgramCounter index) const {
 		return Instruction<TRegister>(itype[index], ivalue[index]);
 	}
 
+	InstructionDebug<TRegister> ReadDebug(TProgramCounter index) const
+	{
+		return InstructionDebug<TRegister>(itype[index], ivalue[index], sourceBegin[index], sourceEnd[index], sourceLine[index], sourceColumn[index]);
+	}
+
+	void Append(const InstructionDebug<TRegister>& instruction) {
+		auto index = itype.size();
+		itype.push_back(instruction.type);
+		ivalue.push_back(instruction.value);
+		if (debug)
+		{
+			sourceBegin.push_back(instruction.sourceBegin);
+			sourceEnd.push_back(instruction.sourceEnd);
+			sourceLine.push_back(instruction.sourceLine);
+			sourceColumn.push_back(instruction.sourceColumn);
+		}
+	}
+
 	void Append(const Instruction<TRegister>& instruction) {
-		itype.push_back(instruction.Type);
-		ivalue.push_back(instruction.Value);
+		itype.push_back(instruction.type);
+		ivalue.push_back(instruction.value);
 	}
 
 	void Replace(TProgramCounter index, const Instruction<TRegister>& instruction) {
-		itype[index] = instruction.Type;
-		ivalue[index] = instruction.Value;
+		itype[index] = instruction.type;
+		ivalue[index] = instruction.value;
+	}
+
+	void Replace(TProgramCounter index, const InstructionDebug<TRegister>& instruction) {
+		itype[index] = instruction.type;
+		ivalue[index] = instruction.value;
+		if (debug)
+		{
+			sourceBegin[index] = instruction.sourceBegin;
+			sourceEnd[index] = instruction.sourceEnd;
+			sourceLine[index] = instruction.sourceLine;
+			sourceColumn[index] = instruction.sourceColumn;
+		}
 	}
 
 	inline TProgramCounter GetSize() const {
-		return itype.size();
+		return static_cast<TProgramCounter>(itype.size());
+	}
+
+	// removes debug information from program
+	void StripDebugInfo(){
+		sourceBegin.clear();
+		sourceEnd.clear();
+		sourceLine.clear();
+		sourceColumn.clear();
+		source.clear();
+		debug = false;
+	}
+
+	// output operator
+	friend std::ostream& operator<<(std::ostream& out, const Program& program)
+	{
+		size_t srcLastLine = -1;
+		size_t sourceIndex = 0, sourceIndexLine = 0;
+		TProgramCounter absolutePos = 0;
+		bool lastPosLabel = false;
+
+		for (int i = 0; i < program.itype.size(); i++)
+		{
+			// list source lines
+			if (i < program.sourceLine.size())
+			{
+				size_t line = program.sourceLine[i];
+				size_t sourcePrintBegin = sourceIndex;
+				size_t sourcePrintLength = 0;
+				if (line != srcLastLine)
+				{
+					srcLastLine = line;
+					while (sourceIndexLine <= line && sourceIndex < program.source.length())
+					{
+						if (program.source[sourceIndex] == '\n')
+						{
+							sourceIndexLine++;
+							out << ";;;;;;; " << program.source.substr(sourcePrintBegin, sourcePrintLength) << "\n";
+							sourcePrintBegin = sourceIndex + 1;
+							sourcePrintLength = -1;
+						}
+						sourceIndex++;
+						sourcePrintLength++;
+					}
+				}
+			}
+			
+			// list instruction
+			out << "\t" << program.itype[i] << " " << std::showpos << static_cast<int>(program.ivalue[i]);
+
+			if (program.itype[i] == InstructionType::Jz || program.itype[i] == InstructionType::Jnz)
+			{
+				out << "; L_" << std::noshowpos << (absolutePos + program.ivalue[i]) << "\n";
+				out << "L_" << std::noshowpos << absolutePos << ":";
+			}
+
+
+			// source -> instruction breakdown
+			/*if (i < program.sourceBegin.size() && i < program.sourceEnd.size())
+			{
+				out << '\t\t; ' << program.source.substr(program.sourceBegin[i], program.sourceEnd[i]);
+			}*/
+			++absolutePos;
+			out << "\n";
+		}
+		return out;
 	}
 };
 
@@ -101,12 +221,12 @@ public:
 	void Run(const Program<TRegister, TProgramCounter>& program, Memory<TRegister, TPointer>& memory) {
 		while (programCounter < program.GetSize()) {
 			auto instruction = program.Read(programCounter);
-			switch (instruction.Type) {
+			switch (instruction.type) {
 			case InstructionType::Nop:
 				++programCounter;
 				break;
 			case InstructionType::Add:
-				currentValue += instruction.Value;
+				currentValue += instruction.value;
 				zero = currentValue == 0;
 				dirty = true;
 				++programCounter;
@@ -116,13 +236,13 @@ public:
 					memory.Write(pointer, currentValue);
 					dirty = false;
 				}
-				pointer += instruction.Value;
+				pointer += instruction.value;
 				currentValue = memory.Read(pointer);
 				zero = currentValue == 0;
 				++programCounter;
 				break;
 			case InstructionType::In:
-				while(instruction.Value--) {
+				while(instruction.value--) {
 					currentValue = std::getchar();
 				}
 				zero = currentValue == 0;
@@ -130,21 +250,21 @@ public:
 				++programCounter;
 				break;
 			case InstructionType::Out:
-				while(instruction.Value--) {
+				while(instruction.value--) {
 					std::putchar(currentValue);
 				}
 				++programCounter;
 				break;
 			case InstructionType::Jz:
 				if (zero) {
-					programCounter += instruction.Value;
+					programCounter += instruction.value;
 				} else {
 					++programCounter;
 				}
 				break;
 			case InstructionType::Jnz:
 				if (!zero) {
-					programCounter += instruction.Value;
+					programCounter += instruction.value;
 				} else {
 					++programCounter;
 				}
@@ -156,93 +276,228 @@ public:
 	}
 };
 
+
 template <typename TRegister, typename TProgramCounter> class Compiler {
+private:
+
+	class OptimisationInfo
+	{
+	public:
+		int instructionDelta = 0;
+		int pointerDelta = 0;
+	};
+
+	OptimisationInfo OptimizeFlat(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end)
+	{
+		OptimisationInfo info;
+		TProgramCounter startingOutputSize = output.GetSize();
+		for (TProgramCounter i = begin; i<end; ++i)
+		{
+			auto instruction = input.ReadDebug(i);
+			if (instruction.type == InstructionType::Nop)
+			{
+				continue;
+			}
+			if (instruction.type == InstructionType::PtrAdd)
+			{
+				info.pointerDelta += instruction.value;
+			}
+			output.Append(instruction);
+		}
+		info.instructionDelta = (output.GetSize() - startingOutputSize) - (end - begin);
+		return info;
+	}
+
+	OptimisationInfo OptimizeLoop(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end)
+	{
+		TProgramCounter innerBegin = begin + 1;
+		TProgramCounter innerEnd = end - 1;
+
+		InstructionDebug<TRegister> loopBegin = input.ReadDebug(begin);
+		InstructionDebug<TRegister> loopEnd = input.ReadDebug(end - 1);
+
+		auto loopBeginIndex = output.GetSize();
+		output.Append(loopBegin);
+
+		OptimisationInfo info = OptimizeProgram(input, output, innerBegin, innerEnd);
+
+		loopBegin.value += info.instructionDelta;
+		loopEnd.value -= info.instructionDelta;
+
+		output.Replace(loopBeginIndex, loopBegin);
+		output.Append(loopEnd);
+
+		return info;
+	}
+
+	OptimisationInfo OptimizeProgram(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end)
+	{
+		OptimisationInfo info;
+		TProgramCounter ldivIndex = begin;
+		size_t depth = 0;
+		for (TProgramCounter i = begin; i<end; ++i)
+		{
+			Instruction<TRegister> current = input.Read(i);
+			if (current.type == InstructionType::Jz)
+			{
+				if (depth == 0)
+				{
+					OptimisationInfo subInfo = OptimizeFlat(input, output, ldivIndex, i - ldivIndex - 1);
+					info.pointerDelta += subInfo.pointerDelta;
+					info.instructionDelta += subInfo.instructionDelta;
+					ldivIndex = i;
+				}
+				depth++;
+			}
+			if (current.type == InstructionType::Jnz)
+			{
+				depth--;
+				if (depth == 0)
+				{
+					OptimisationInfo subInfo = OptimizeLoop(input, output, ldivIndex, i + 1);
+					info.pointerDelta += subInfo.pointerDelta;
+					info.instructionDelta += subInfo.instructionDelta;
+					ldivIndex = i + 1;
+				}
+			}
+		}
+		OptimisationInfo subInfo = OptimizeFlat(input, output, ldivIndex, end);
+		info.pointerDelta += subInfo.pointerDelta;
+		info.instructionDelta += subInfo.instructionDelta;
+		return info;
+	}
+
 public:
+
+	// compiles bf source code to bytecode representation, collpases consecutive instructions
 	Program<TRegister, TProgramCounter> Compile(const std::string& code) {
 		Program<TRegister, TProgramCounter> program;
 		std::vector<TProgramCounter> returnStack;
-		Instruction<TRegister> instruction(InstructionType::Nop, 0);
+		InstructionDebug<TRegister> instruction(InstructionType::Nop, 0, 0, 0, 0, 0);
+		size_t codePos = 0;
+		size_t codeLine = 0;
+		size_t codeColumn = 0;
+		program.source = code; // copy source
+		program.debug = true;
 
 		for (auto c : code) {
 			switch(c) {
 			case '<': 
-				if (instruction.Type != InstructionType::PtrAdd) {
+				if (instruction.type != InstructionType::PtrAdd) {
 					program.Append(instruction);
-					instruction.Type = InstructionType::PtrAdd;
-					instruction.Value = -1;
+					instruction.type = InstructionType::PtrAdd;
+					instruction.sourceBegin = codePos;
+					instruction.sourceEnd = codePos + 1;
+					instruction.sourceLine = codeLine;
+					instruction.sourceColumn = codeColumn;
+					instruction.value = -1;
 				} else {
-					--instruction.Value;
+					--instruction.value;
+					instruction.sourceEnd = codePos + 1;
 				}
 				break;
 
 			case '>':
-				if (instruction.Type != InstructionType::PtrAdd) {
+				if (instruction.type != InstructionType::PtrAdd) {
 					program.Append(instruction);
-					instruction.Type = InstructionType::PtrAdd;
-					instruction.Value = +1;
+					instruction.type = InstructionType::PtrAdd;
+					instruction.sourceBegin = codePos;
+					instruction.sourceEnd = codePos + 1;
+					instruction.sourceLine = codeLine;
+					instruction.sourceColumn = codeColumn;
+					instruction.value = +1;
 				} else {
-					++instruction.Value;
+					++instruction.value;
+					instruction.sourceEnd = codePos + 1;
 				}
 				break;
 
 			case '-':
-				if (instruction.Type != InstructionType::Add) {
+				if (instruction.type != InstructionType::Add) {
 					program.Append(instruction);
-					instruction.Type = InstructionType::Add;
-					instruction.Value = -1;
+					instruction.type = InstructionType::Add;
+					instruction.sourceBegin = codePos;
+					instruction.sourceEnd = codePos + 1;
+					instruction.sourceLine = codeLine;
+					instruction.sourceColumn = codeColumn;
+					instruction.value = -1;
 				}
 				else {
-					--instruction.Value;
+					--instruction.value;
+					instruction.sourceEnd = codePos + 1;
 				}
 				break;
 
 			case '+':
-				if (instruction.Type != InstructionType::Add) {
+				if (instruction.type != InstructionType::Add) {
 					program.Append(instruction);
-					instruction.Type = InstructionType::Add;
-					instruction.Value = +1;
+					instruction.type = InstructionType::Add;
+					instruction.sourceBegin = codePos;
+					instruction.sourceEnd = codePos + 1;
+					instruction.sourceLine = codeLine;
+					instruction.sourceColumn = codeColumn;
+					instruction.value = +1;
 				}
 				else {
-					++instruction.Value;
+					++instruction.value;
+					instruction.sourceEnd = codePos + 1;
 				}
 				break;
 
 			case '.':
-				if (instruction.Type != InstructionType::Out) {
+				if (instruction.type != InstructionType::Out) {
 					program.Append(instruction);
-					instruction.Type = InstructionType::Out;
-					instruction.Value = +1;
+					instruction.type = InstructionType::Out;
+					instruction.sourceBegin = codePos;
+					instruction.sourceEnd = codePos + 1;
+					instruction.sourceLine = codeLine;
+					instruction.sourceColumn = codeColumn;
+					instruction.value = +1;
 				}
 				else {
-					++instruction.Value;
+					++instruction.value;
+					instruction.sourceEnd = codePos + 1;
 				}
 				break;
 
 			case ',':
-				if (instruction.Type != InstructionType::In) {
+				if (instruction.type != InstructionType::In) {
 					program.Append(instruction);
-					instruction.Type = InstructionType::In;
-					instruction.Value = +1;
+					instruction.type = InstructionType::In;
+					instruction.sourceBegin = codePos;
+					instruction.sourceEnd = codePos + 1;
+					instruction.sourceLine = codeLine;
+					instruction.sourceColumn = codeColumn;
+					instruction.value = +1;
 				}
 				else {
-					++instruction.Value;
+					++instruction.value;
+					instruction.sourceEnd = codePos + 1;
 				}
 				break;
 
 			case '[': 
-				if (instruction.Type != InstructionType::Nop) {
+				if (instruction.type != InstructionType::Nop) {
 					program.Append(instruction);
 				}
-				instruction.Type = InstructionType::Jz;
-				instruction.Value = 0; // we don't know yet
+				instruction.type = InstructionType::Jz;
+				instruction.sourceBegin = codePos;
+				instruction.sourceEnd = codePos + 1;
+				instruction.sourceLine = codeLine;
+				instruction.sourceColumn = codeColumn;
+				instruction.value = 0; // we don't know yet
 				returnStack.push_back(program.GetSize());
 				break;
 
 			case ']':
-				if (instruction.Type != InstructionType::Nop) {
+				if (instruction.type != InstructionType::Nop) {
 					program.Append(instruction);
 				}
-				instruction.Type = InstructionType::Jnz;
+				instruction.type = InstructionType::Jnz;
+				instruction.sourceBegin = codePos;
+				instruction.sourceEnd = codePos + 1;
+				instruction.sourceLine = codeLine;
+				instruction.sourceColumn = codeColumn;
 				{
 					if (returnStack.size() <= 0) {
 						throw std::invalid_argument("Unexpected ] found while parsing. Make sure there are no unbalanced brackets.");
@@ -251,18 +506,27 @@ public:
 					auto matchingIndex = returnStack.back();
 					returnStack.pop_back();
 					auto matchingInstruction = program.Read(matchingIndex);
-					matchingInstruction.Value = currentIndex - matchingIndex + 1;
-					instruction.Value = matchingIndex - currentIndex + 1;
+					matchingInstruction.value = currentIndex - matchingIndex + 1;
+					instruction.value = matchingIndex - currentIndex + 1;
 					program.Replace(matchingIndex, matchingInstruction);
 				}
 				break;
+			case '\n':
+				codeLine++;
+				codeColumn = 0;
+				break;
+			default:
+				// ignore char, do noting
+				break;
 			}
+			codePos++;
+			codeColumn++;
 		}
 
-		if (instruction.Type != InstructionType::Nop) {
+		if (instruction.type != InstructionType::Nop) {
 			program.Append(instruction);
-			instruction.Type = InstructionType::Nop;
-			instruction.Value = 0;
+			instruction.type = InstructionType::Nop;
+			instruction.value = 0;
 		}
 
 		if (returnStack.size() > 0) {
@@ -272,12 +536,23 @@ public:
 		return program;
 	}
 
+	
+
+	Program<TRegister, TProgramCounter> Optimize(const Program<TRegister, TProgramCounter>& input)
+	{
+		Program<TRegister, TProgramCounter> output;
+		OptimizeProgram(input, output, 0, input.GetSize());
+		return output;
+	}
+	
 };
+
+
 
 int main(int argc, char** argv) {
 	if (argc!=2)
 	{
-		printf("Usage: sikfck sourcefile.b\n");
+		printf("Usage: sikfck sourcefile.bf\n");
 		return 1;
 	}
 	std::ifstream t(argv[1]);
@@ -285,12 +560,12 @@ int main(int argc, char** argv) {
 	buffer << t.rdbuf();
 	Compiler<int, int> compiler;
 	auto program = compiler.Compile(buffer.str());
+	//auto optimised = compiler.Optimize(program);
 	Cpu<int, int, int> core;
 	Memory<int, int> memory;
 	core.Run(program, memory);
-	/*for (int i=0; i<program.itype.size(); i++)
-	{
-		std::cout << program.itype[i] << " " << static_cast<int>(program.ivalue[i]) << "\n";
-	}*/
+
+	//std::cerr << "\n\n======= Final Bytecode Listing =======\n\n";
+	//std::cerr << program;
 	return 0;
 }
