@@ -7,6 +7,8 @@
 enum class InstructionType {
 	Nop,
 	Add,
+	AddPi,
+	AddPd,
 	PtrAdd,
 	In,
 	Out,
@@ -19,6 +21,8 @@ std::ostream& operator<<(std::ostream& out, const InstructionType& i){
 	{
 	case InstructionType::Nop: out << "NOP"; break;
 	case InstructionType::Add: out << "ADD"; break;
+	case InstructionType::AddPi: out << "ADDPI"; break;
+	case InstructionType::AddPd: out << "ADDPD"; break;
 	case InstructionType::PtrAdd: out << "PTR"; break;
 	case InstructionType::In: out << "IN "; break;
 	case InstructionType::Out: out << "OUT"; break;
@@ -231,6 +235,22 @@ public:
 				dirty = true;
 				++programCounter;
 				break;
+			case InstructionType::AddPi:
+				memory.Write(pointer, currentValue + instruction.value);
+				dirty = false;
+				++pointer;
+				currentValue = memory.Read(pointer);
+				zero = currentValue == 0;
+				++programCounter;
+				break;
+			case InstructionType::AddPd:
+				memory.Write(pointer, currentValue + instruction.value);
+				dirty = false;
+				--pointer;
+				currentValue = memory.Read(pointer);
+				zero = currentValue == 0;
+				++programCounter;
+				break;
 			case InstructionType::PtrAdd:
 				if (dirty) {
 					memory.Write(pointer, currentValue);
@@ -289,27 +309,101 @@ private:
 
 	OptimisationInfo OptimizeFlat(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end)
 	{
+		if (verboseOptimisation)
+		{
+			std::cerr << std::noshowpos << "Opt Flat Begin (" << begin << ", " << (end - 1) << ")\n";
+		}
 		OptimisationInfo info;
+		TProgramCounter outBegin = output.GetSize();
 		TProgramCounter startingOutputSize = output.GetSize();
+		InstructionDebug<TRegister> previous(InstructionType::Nop,0,0,0,0,0);
 		for (TProgramCounter i = begin; i<end; ++i)
 		{
-			auto instruction = input.ReadDebug(i);
-			if (instruction.type == InstructionType::Nop)
+			InstructionDebug<TRegister> instruction = input.ReadDebug(i);
+			switch (instruction.type)
 			{
+			case InstructionType::Nop:
+				// strip nop
 				continue;
-			}
-			if (instruction.type == InstructionType::PtrAdd)
-			{
+			case InstructionType::PtrAdd:
+				if (instruction.value == 0)
+				{
+					continue;
+				}
 				info.pointerDelta += instruction.value;
+				if (previous.type == InstructionType::Add && instruction.value == -1)
+				{
+					instruction.type = InstructionType::AddPd;
+					instruction.value = previous.value;
+					instruction.sourceLine = previous.sourceLine;
+					instruction.sourceColumn = previous.sourceColumn;
+					instruction.sourceBegin = previous.sourceBegin;
+					output.Replace(output.GetSize() - 1, instruction);
+				} 
+				else if (previous.type == InstructionType::Add && instruction.value == +1)
+				{
+					instruction.type = InstructionType::AddPi;
+					instruction.value = previous.value;
+					instruction.sourceLine = previous.sourceLine;
+					instruction.sourceColumn = previous.sourceColumn;
+					instruction.sourceBegin = previous.sourceBegin;
+					output.Replace(output.GetSize() - 1, instruction);
+				}
+				else
+				{
+					output.Append(instruction);
+				}
+				break;
+			default:
+				output.Append(instruction);
+				break;
 			}
-			output.Append(instruction);
+			previous = instruction;
 		}
 		info.instructionDelta = (output.GetSize() - startingOutputSize) - (end - begin);
+		TProgramCounter outEnd = output.GetSize();
+
+		// print optimised section
+		if (verboseOptimisation)
+		{
+			TProgramCounter i = begin, j = outBegin;
+			while (i<end || j<outEnd)
+			{
+				if (i < end) {
+					std::cerr << "\t" << input.itype[i] << "\t" << std::showpos << static_cast<int>(input.ivalue[i]) << "\t";
+				}
+				else {
+					std::cerr << "\t\t\t";
+				}
+
+				if (j < outEnd)
+				{
+					if (i < end)
+					{
+						std::cerr << "->";
+					}
+					std::cerr << "\t" << output.itype[j] << "\t" << std::showpos << static_cast<int>(output.ivalue[j]) << "\t";
+				}
+				else
+				{
+					std::cerr << "\t\t\t";
+				}
+				std::cerr << "\n";
+				++i;
+				++j;
+			}
+			std::cerr << std::noshowpos << "Opt Flat End (" << begin << ", " << (end - 1) << ")\n";
+			std::cerr << "i-delta: " << info.instructionDelta << " p-delta: " << info.pointerDelta << "\n";
+		}
 		return info;
 	}
 
 	OptimisationInfo OptimizeLoop(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end)
 	{
+		if (verboseOptimisation)
+		{
+			std::cerr << std::noshowpos << "Opt Loop Begin (" << begin << ", " << (end - 1) << ")\n";
+		}
 		TProgramCounter innerBegin = begin + 1;
 		TProgramCounter innerEnd = end - 1;
 
@@ -318,21 +412,50 @@ private:
 
 		auto loopBeginIndex = output.GetSize();
 		output.Append(loopBegin);
+		if (verboseOptimisation)
+		{
+			std::cerr << "\t" << loopBegin.type << "\t" << std::showpos << static_cast<int>(loopBegin.value) << "???\n";
+		}
 
-		OptimisationInfo info = OptimizeProgram(input, output, innerBegin, innerEnd);
+		OptimisationInfo info;
+		if (innerBegin < innerEnd)
+		{
+			info = OptimizeProgram(input, output, innerBegin, innerEnd);
+		}
+		else
+		{
+			if (innerBegin == innerEnd)
+			{
+				std::cerr << "Infinite loop detected.\n";
+			} 
+			else
+			{
+				throw std::runtime_error("invalid loop");
+			}
+		}
 
 		loopBegin.value += info.instructionDelta;
 		loopEnd.value -= info.instructionDelta;
 
 		output.Replace(loopBeginIndex, loopBegin);
 		output.Append(loopEnd);
+		if (verboseOptimisation)
+		{
+			std::cerr << "\t" << loopEnd.type << "\t" << std::showpos << static_cast<int>(loopEnd.value) << "\n";
 
+			std::cerr << std::noshowpos << "Opt Loop End (" << begin << ", " << (end - 1) << ")\n";
+			std::cerr << "i-delta: " << info.instructionDelta << " p-delta: " << info.pointerDelta << "\n";
+		}
 		return info;
 	}
 
 	OptimisationInfo OptimizeProgram(const Program<TRegister, TProgramCounter>& input, Program<TRegister, TProgramCounter>& output, TProgramCounter begin, TProgramCounter end)
 	{
-		OptimisationInfo info;
+		if (verboseOptimisation)
+		{
+			std::cerr << std::noshowpos << "Opt Program Begin (" << begin << ", " << (end - 1) << ")\n";
+		}
+		OptimisationInfo info; 
 		TProgramCounter ldivIndex = begin;
 		size_t depth = 0;
 		for (TProgramCounter i = begin; i<end; ++i)
@@ -342,9 +465,25 @@ private:
 			{
 				if (depth == 0)
 				{
-					OptimisationInfo subInfo = OptimizeFlat(input, output, ldivIndex, i - ldivIndex - 1);
-					info.pointerDelta += subInfo.pointerDelta;
-					info.instructionDelta += subInfo.instructionDelta;
+					TProgramCounter flatBegin = ldivIndex;
+					TProgramCounter flatEnd = i;
+					if (flatBegin < flatEnd)
+					{
+						OptimisationInfo subInfo = OptimizeFlat(input, output, ldivIndex, flatEnd);
+						info.pointerDelta += subInfo.pointerDelta;
+						info.instructionDelta += subInfo.instructionDelta;
+					} 
+					else
+					{
+						if (flatBegin == flatEnd)
+						{
+							// ok, no instructions
+						} 
+						else
+						{
+							throw std::runtime_error("invalid bytecode");
+						}
+					}
 					ldivIndex = i;
 				}
 				depth++;
@@ -354,9 +493,18 @@ private:
 				depth--;
 				if (depth == 0)
 				{
-					OptimisationInfo subInfo = OptimizeLoop(input, output, ldivIndex, i + 1);
-					info.pointerDelta += subInfo.pointerDelta;
-					info.instructionDelta += subInfo.instructionDelta;
+					TProgramCounter loopBegin = ldivIndex;
+					TProgramCounter loopEnd = i + 1;
+					if (loopBegin < loopEnd)
+					{
+						OptimisationInfo subInfo = OptimizeLoop(input, output, loopBegin, loopEnd);
+						info.pointerDelta += subInfo.pointerDelta;
+						info.instructionDelta += subInfo.instructionDelta;
+					}
+					else
+					{
+						throw std::runtime_error("invalid bytecode");
+					}
 					ldivIndex = i + 1;
 				}
 			}
@@ -364,6 +512,11 @@ private:
 		OptimisationInfo subInfo = OptimizeFlat(input, output, ldivIndex, end);
 		info.pointerDelta += subInfo.pointerDelta;
 		info.instructionDelta += subInfo.instructionDelta;
+		if (verboseOptimisation)
+		{
+			std::cerr << std::noshowpos << "Opt Program End (" << begin << ", " << (end - 1) << ")\n";
+			std::cerr << "i-delta: " << info.instructionDelta << " p-delta: " << info.pointerDelta << "\n";
+		}
 		return info;
 	}
 
@@ -506,8 +659,8 @@ public:
 					auto matchingIndex = returnStack.back();
 					returnStack.pop_back();
 					auto matchingInstruction = program.Read(matchingIndex);
-					matchingInstruction.value = currentIndex - matchingIndex + 1;
-					instruction.value = matchingIndex - currentIndex + 1;
+					matchingInstruction.value = currentIndex - matchingIndex;
+					instruction.value = matchingIndex - currentIndex;
 					program.Replace(matchingIndex, matchingInstruction);
 				}
 				break;
@@ -541,15 +694,22 @@ public:
 	Program<TRegister, TProgramCounter> Optimize(const Program<TRegister, TProgramCounter>& input)
 	{
 		Program<TRegister, TProgramCounter> output;
+		output.debug = input.debug;
+		output.source = input.source;
 		OptimizeProgram(input, output, 0, input.GetSize());
 		return output;
 	}
-	
+
+	bool verboseOptimisation = false;
 };
 
 
 
 int main(int argc, char** argv) {
+	bool finalListing = false;
+	bool verboseOptimisation = false;
+
+
 	if (argc!=2)
 	{
 		printf("Usage: sikfck sourcefile.bf\n");
@@ -559,13 +719,18 @@ int main(int argc, char** argv) {
 	std::stringstream buffer;
 	buffer << t.rdbuf();
 	Compiler<int, int> compiler;
+	compiler.verboseOptimisation = verboseOptimisation;
 	auto program = compiler.Compile(buffer.str());
-	//auto optimised = compiler.Optimize(program);
+	auto optimised = compiler.Optimize(program);
 	Cpu<int, int, int> core;
 	Memory<int, int> memory;
-	core.Run(program, memory);
+	core.Run(optimised, memory);
 
-	//std::cerr << "\n\n======= Final Bytecode Listing =======\n\n";
-	//std::cerr << program;
+
+	if (finalListing)
+	{
+		std::cerr << "\n\n======= Final Bytecode Listing =======\n\n";
+		std::cerr << optimised;
+	}
 	return 0;
 }
